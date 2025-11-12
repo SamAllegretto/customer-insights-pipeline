@@ -1,11 +1,17 @@
 # src/config/settings.py
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from pathlib import Path
 
 # Get project root (2 levels up from this file)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(
+        env_file=str(PROJECT_ROOT / ".env"),
+        case_sensitive=False
+    )
+    
     # OpenAI
     openai_api_key: str
     openai_embedding_model: str = "text-embedding-3-small"
@@ -29,7 +35,3 @@ class Settings(BaseSettings):
     # Pipeline config
     batch_size: int = 100
     embedding_dimension: int = 1536
-    
-    class Config:
-        env_file = str(PROJECT_ROOT / ".env")
-        case_sensitive = False

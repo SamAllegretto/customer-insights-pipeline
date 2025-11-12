@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 from typing import Optional, List
 from enum import Enum
@@ -7,6 +7,8 @@ from enum import Enum
 
 class FeedbackRecord(BaseModel):
     """Raw customer feedback record."""
+    model_config = ConfigDict(use_enum_values=True)
+    
     feedback_id: str
     text: str
     source: str
@@ -14,9 +16,7 @@ class FeedbackRecord(BaseModel):
     product_id: Optional[str] = None
     category: Optional[str] = None
     rating: Optional[int] = None
-    
-    class Config:
-        use_enum_values = True
+    cluster_id: Optional[int] = None
 
 
 class EmbeddingRecord(BaseModel):
