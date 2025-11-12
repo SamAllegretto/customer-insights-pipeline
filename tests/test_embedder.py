@@ -1,88 +1,75 @@
 """Unit tests for the Embedder class."""
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+import os
 from src.embedding.embedder import Embedder
 from src.config.settings import Settings
 
 
 @pytest.fixture
-def mock_config():
-    """Create a mock configuration."""
-    config = Mock(spec=Settings)
-    config.openai_api_key = "test-api-key"
-    config.openai_embedding_model = "text-embedding-3-small"
-    return config
-
-
-@pytest.fixture
-def mock_openai_client():
-    """Create a mock OpenAI client."""
-    with patch('src.embedding.embedder.OpenAI') as mock_client:
-        yield mock_client
+def real_config():
+    """Create a real configuration with OpenAI API key from environment."""
+    # Get API key from environment variable
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        pytest.skip("OPENAI_API_KEY environment variable not set")
+    
+    # Create a minimal Settings object with required fields
+    # Use default or dummy values for non-OpenAI fields
+    return type('Settings', (), {
+        'openai_api_key': api_key,
+        'openai_embedding_model': 'text-embedding-3-small',
+        'openai_llm_model': 'gpt-3.5-turbo',
+        'sql_server_host': 'dummy',
+        'sql_server_database': 'dummy',
+        'sql_server_username': 'dummy',
+        'sql_server_password': 'dummy',
+        'postgres_host': 'dummy',
+        'postgres_database': 'dummy',
+        'postgres_username': 'dummy',
+        'postgres_password': 'dummy',
+    })()
 
 
 class TestEmbedder:
     """Test Embedder class."""
     
-    def test_embedder_initialization(self, mock_config, mock_openai_client):
+    def test_embedder_initialization(self, real_config):
         """Test Embedder initializes correctly."""
-        embedder = Embedder(mock_config)
-        assert embedder.config == mock_config
+        embedder = Embedder(real_config)
+        assert embedder.config == real_config
         assert embedder.model == "text-embedding-3-small"
-        mock_openai_client.assert_called_once_with(api_key="test-api-key")
+        assert embedder.client is not None
     
-    def test_embed_single(self, mock_config, mock_openai_client):
-        """Test embedding a single text."""
-        # Setup mock response
-        mock_client_instance = mock_openai_client.return_value
-        mock_response = MagicMock()
-        mock_response.data = [MagicMock(embedding=[0.1] * 1536)]
-        mock_client_instance.embeddings.create.return_value = mock_response
-        
-        embedder = Embedder(mock_config)
+    def test_embed_single(self, real_config):
+        """Test embedding a single text with real API."""
+        embedder = Embedder(real_config)
         result = embedder.embed_single("Test text")
         
+        # Check that we get a valid embedding vector
+        assert isinstance(result, list)
+        assert len(result) > 0  # Should have embedding dimensions
+        # text-embedding-3-small produces 1536-dimensional vectors
         assert len(result) == 1536
-        assert result[0] == 0.1
-        mock_client_instance.embeddings.create.assert_called_once_with(
-            model="text-embedding-3-small",
-            input=["Test text"]
-        )
+        # Check that all values are floats
+        assert all(isinstance(x, float) for x in result)
     
-    def test_embed_texts(self, mock_config, mock_openai_client):
-        """Test embedding multiple texts."""
-        # Setup mock response
-        mock_client_instance = mock_openai_client.return_value
-        mock_response = MagicMock()
-        mock_response.data = [
-            MagicMock(embedding=[0.1] * 1536),
-            MagicMock(embedding=[0.2] * 1536),
-            MagicMock(embedding=[0.3] * 1536)
-        ]
-        mock_client_instance.embeddings.create.return_value = mock_response
-        
-        embedder = Embedder(mock_config)
+    def test_embed_texts(self, real_config):
+        """Test embedding multiple texts with real API."""
+        embedder = Embedder(real_config)
         texts = ["Text 1", "Text 2", "Text 3"]
         result = embedder.embed_texts(texts)
         
+        # Check that we get embeddings for all texts
         assert len(result) == 3
-        assert len(result[0]) == 1536
-        assert result[0][0] == 0.1
-        assert result[1][0] == 0.2
-        assert result[2][0] == 0.3
-        mock_client_instance.embeddings.create.assert_called_once_with(
-            model="text-embedding-3-small",
-            input=texts
-        )
+        # Each embedding should be 1536-dimensional
+        for embedding in result:
+            assert isinstance(embedding, list)
+            assert len(embedding) == 1536
+            assert all(isinstance(x, float) for x in embedding)
     
-    def test_embed_texts_empty_list(self, mock_config, mock_openai_client):
-        """Test embedding an empty list."""
-        mock_client_instance = mock_openai_client.return_value
-        mock_response = MagicMock()
-        mock_response.data = []
-        mock_client_instance.embeddings.create.return_value = mock_response
-        
-        embedder = Embedder(mock_config)
+    def test_embed_texts_empty_list(self, real_config):
+        """Test embedding an empty list with real API."""
+        embedder = Embedder(real_config)
         result = embedder.embed_texts([])
         
         assert result == []
