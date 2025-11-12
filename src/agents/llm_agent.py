@@ -11,7 +11,7 @@ class ChatAgent:
     def __init__(self, config: Settings):
         self.config = config
         self.client = OpenAI(api_key=config.openai_api_key)
-        self.model = config.openai_chat_model
+        self.model = config.openai_llm_model
 
     def chat(self, messages: List[dict]) -> str:
         """
