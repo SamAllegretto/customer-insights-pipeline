@@ -133,6 +133,7 @@ class BackfillPipeline:
         
         # Create embedding records
         embedding_records = []
+
         for feedback, vector in zip(feedback_batch, vectors):
             embedding_record = EmbeddingRecord(
                 feedback_id=feedback.feedback_id,
@@ -198,7 +199,7 @@ def main():
     
     # Run backfill pipeline
     pipeline = BackfillPipeline(config)
-    stats = pipeline.run()
+    stats = pipeline.run(limit=1000)
     
     # Print results
     print("\n" + "="*50)

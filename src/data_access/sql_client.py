@@ -39,11 +39,12 @@ class SQLClient:
         query = """
             SELECT feedback_id, feedback_text, feedback_source, created_at, sku, category, rating, cluster_id
             FROM customer_insights.feedback
+            WHERE created_at is not NULL
         """
 
         params = []
         if last_processed_date:
-            query += " WHERE created_at > %s"
+            query += " AND created_at > %s"
             params.append(last_processed_date)
 
         
