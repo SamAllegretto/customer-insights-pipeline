@@ -25,7 +25,7 @@ az storage account create \
 
 # Create a container for scripts
 az storage container create \
-  --name batch-scripts \
+  --name scripts \
   --account-name customerinsightsstorage
 ```
 
@@ -77,9 +77,6 @@ Add the following secrets to your GitHub repository (`Settings` → `Secrets and
 2. **AZURE_STORAGE_ACCOUNT_NAME**
    - Value: Your storage account name (e.g., `customerinsightsstorage`)
 
-3. **AZURE_STORAGE_CONTAINER_NAME**
-   - Value: Your container name (e.g., `batch-scripts`)
-
 ## Workflow Triggers
 
 The GitHub Actions workflow will automatically run when:
@@ -92,11 +89,19 @@ The GitHub Actions workflow will automatically run when:
 
 ## What Gets Deployed
 
-The workflow uploads the following to Azure Blob Storage:
+The workflow performs the following steps:
 
-- All Python scripts from the `scripts/` directory
-- All Python source code from the `src/` directory (for dependencies)
-- The `requirements.txt` file (for installing dependencies in Azure Batch)
+1. **Validation** - Lints all Python scripts for syntax errors
+2. **Container Setup** - Ensures the `scripts` container exists in Azure Storage
+3. **Upload Scripts** - Uploads individual Python files from `scripts/` and `src/` directories
+4. **Script Inventory** - Creates a JSON inventory file with versioning information
+5. **Verification** - Lists all uploaded files
+
+Files uploaded to Azure Blob Storage:
+- All Python scripts from the `scripts/` directory → `scripts/` folder in blob storage
+- All Python source code from the `src/` directory → `src/` folder in blob storage
+- The `requirements.txt` file → root of blob storage
+- Script inventory JSON → `inventory/script_inventory.json`
 
 ## Using with Azure Data Factory
 
@@ -125,15 +130,17 @@ After the workflow runs, you can verify the deployment:
 # List uploaded files
 az storage blob list \
   --account-name customerinsightsstorage \
-  --container-name batch-scripts \
+  --container-name scripts \
+  --auth-mode login \
   --output table
 
 # Download a file to verify
 az storage blob download \
   --account-name customerinsightsstorage \
-  --container-name batch-scripts \
-  --name run_daily_pipeline.py \
-  --file downloaded_script.py
+  --container-name scripts \
+  --name scripts/run_daily_pipeline.py \
+  --file downloaded_script.py \
+  --auth-mode login
 ```
 
 ## Troubleshooting
