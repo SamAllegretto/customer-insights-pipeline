@@ -12,7 +12,7 @@ from src.config.settings import Settings
 from src.data_access.sql_client import SQLClient
 from src.data_access.cosmos_client import CosmosClient
 from src.embedding.embedder import Embedder
-from src.tagging.tagger import FeedbackTagger
+from src.agents.llm_agent import FeedbackTagger
 from src.models.schemas import FeedbackRecord, EmbeddingRecord, TagRecord
 
 
