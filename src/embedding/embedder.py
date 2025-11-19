@@ -1,8 +1,12 @@
 # src/embedding/embedder.py
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from typing import List
 from src.config.settings import Settings
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Embedder:
@@ -30,11 +34,7 @@ class Embedder:
         
         # If texts fit in a single batch, process directly (no threading overhead)
         if len(texts) <= batch_size:
-            response = self.client.embeddings.create(
-                model=self.model,
-                input=texts
-            )
-            return [item.embedding for item in response.data]
+            return self._embed_batch(texts)
         
         # Split texts into batches
         batches = []
@@ -72,6 +72,7 @@ class Embedder:
     def _embed_batch(self, batch: List[str]) -> List[List[float]]:
         """
         Generate embeddings for a batch of texts (internal method for threading).
+        Uses exponential backoff retry logic for rate limit errors.
         
         Args:
             batch: List of text strings to embed
@@ -79,15 +80,33 @@ class Embedder:
         Returns:
             List of embedding vectors
         """
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=batch
-        )
-        return [item.embedding for item in response.data]
+        max_retries = 5
+        base_delay = 1.0  # Start with 1 second delay
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.embeddings.create(
+                    model=self.model,
+                    input=batch
+                )
+                return [item.embedding for item in response.data]
+            except RateLimitError as e:
+                if attempt == max_retries - 1:
+                    # Last attempt, raise the error
+                    raise
+                
+                # Calculate exponential backoff delay
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Rate limit hit on embedding batch. Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+            except Exception as e:
+                # For other errors, raise immediately
+                raise
     
     def embed_single(self, text: str) -> List[float]:
         """
         Generate embedding for a single text.
+        Uses exponential backoff retry logic for rate limit errors.
         
         Args:
             text: Text string to embed
@@ -95,9 +114,5 @@ class Embedder:
         Returns:
             Embedding vector
         """
-        response = self.client.embeddings.create(
-            model=self.model,
-            input=[text]
-        )
-        
-        return response.data[0].embedding
+        embeddings = self._embed_batch([text])
+        return embeddings[0]

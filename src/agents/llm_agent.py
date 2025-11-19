@@ -1,10 +1,14 @@
 # src/agents/llm_agent.py
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from typing import List, Dict, Union, Optional
 from src.config.settings import Settings
 import json
 import re
+import time
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 class ChatAgent:
     """OpenAI Chatbot client."""
@@ -17,6 +21,7 @@ class ChatAgent:
     def chat(self, messages: List[dict]) -> str:
         """
         Send a list of messages to the OpenAI chat model and get the response.
+        Uses exponential backoff retry logic for rate limit errors.
 
         Args:
             messages: List of message dicts (e.g., [{"role": "user", "content": "Hello"}])
@@ -24,11 +29,28 @@ class ChatAgent:
         Returns:
             The assistant's reply as a string.
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages
-        )
-        return response.choices[0].message.content
+        max_retries = 5
+        base_delay = 1.0  # Start with 1 second delay
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages
+                )
+                return response.choices[0].message.content
+            except RateLimitError as e:
+                if attempt == max_retries - 1:
+                    # Last attempt, raise the error
+                    raise
+                
+                # Calculate exponential backoff delay
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Rate limit hit on chat completion. Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+            except Exception as e:
+                # For other errors, raise immediately
+                raise
 
     def chat_single(self, prompt: str) -> str:
         """
