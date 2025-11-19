@@ -35,3 +35,4 @@ class Settings(BaseSettings):
     # Pipeline config
     batch_size: int = 100
     embedding_dimension: int = 1536
+    max_workers: int = 5  # Number of concurrent threads for LLM API calls
