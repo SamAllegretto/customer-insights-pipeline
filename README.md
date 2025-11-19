@@ -24,12 +24,12 @@ The pipeline can be configured via environment variables or a `.env` file. Key c
 
 ### Performance Tuning
 
-- `MAX_WORKERS` (default: 5): Number of concurrent threads for LLM tagging operations. Increase for higher throughput when processing large batches, but be mindful of API rate limits.
+- `MAX_WORKERS` (default: 5): Number of concurrent threads for LLM tagging and embedding operations. Increase for higher throughput when processing large batches, but be mindful of API rate limits.
 - `BATCH_SIZE` (default: 100): Number of records to process in each pipeline batch.
 
 ### Thread Safety
 
-The pipeline uses multithreading to parallelize I/O-bound LLM API calls for tagging operations. The OpenAI client is thread-safe, and no shared mutable state is accessed during parallel processing, ensuring safe concurrent execution.
+The pipeline uses multithreading to parallelize I/O-bound OpenAI API calls for both tagging and embedding operations. The OpenAI client is thread-safe, and no shared mutable state is accessed during parallel processing, ensuring safe concurrent execution. Both the `FeedbackTagger` and `Embedder` classes use ThreadPoolExecutor to process batches in parallel while maintaining result ordering.
 
 ## Usage
 
