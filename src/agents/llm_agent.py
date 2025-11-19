@@ -1,9 +1,14 @@
 # src/agents/llm_agent.py
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from typing import List, Dict, Union, Optional
 from src.config.settings import Settings
 import json
 import re
+import time
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 class ChatAgent:
     """OpenAI Chatbot client."""
@@ -16,6 +21,7 @@ class ChatAgent:
     def chat(self, messages: List[dict]) -> str:
         """
         Send a list of messages to the OpenAI chat model and get the response.
+        Uses exponential backoff retry logic for rate limit errors.
 
         Args:
             messages: List of message dicts (e.g., [{"role": "user", "content": "Hello"}])
@@ -23,11 +29,28 @@ class ChatAgent:
         Returns:
             The assistant's reply as a string.
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages
-        )
-        return response.choices[0].message.content
+        max_retries = 5
+        base_delay = 1.0  # Start with 1 second delay
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages
+                )
+                return response.choices[0].message.content
+            except RateLimitError as e:
+                if attempt == max_retries - 1:
+                    # Last attempt, raise the error
+                    raise
+                
+                # Calculate exponential backoff delay
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Rate limit hit on chat completion. Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+            except Exception as e:
+                # For other errors, raise immediately
+                raise
 
     def chat_single(self, prompt: str) -> str:
         """
@@ -340,6 +363,7 @@ class FeedbackTagger:
         """
         self.agent = ChatAgent(config)
         self.categories = custom_categories if custom_categories else self.DEFAULT_CATEGORIES
+        self.max_workers = config.max_workers
     
     def tag_single(self, feedback_text: str, allow_multiple: bool = True) -> List[str]:
         """
@@ -357,7 +381,7 @@ class FeedbackTagger:
     def tag_batch(self, feedback_texts: List[str], allow_multiple: bool = True, 
                   batch_size: int = 10) -> List[List[str]]:
         """
-        Tag multiple pieces of feedback efficiently.
+        Tag multiple pieces of feedback efficiently using multithreading.
         
         Args:
             feedback_texts: List of customer feedback texts
@@ -367,13 +391,42 @@ class FeedbackTagger:
         Returns:
             List of tag lists (each feedback item gets a list of tags)
         """
-        all_results = []
-        
-        # Process in batches for efficiency
+        # Split feedback into batches
+        batches = []
         for i in range(0, len(feedback_texts), batch_size):
             batch = feedback_texts[i:i + batch_size]
-            batch_results = self.agent.tag_feedback_batch(batch, self.categories, allow_multiple)
-            all_results.extend(batch_results)
+            batches.append((i, batch))
+        
+        # Process batches in parallel using ThreadPoolExecutor
+        results_dict = {}
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all batch processing tasks
+            future_to_batch = {
+                executor.submit(
+                    self.agent.tag_feedback_batch, 
+                    batch, 
+                    self.categories, 
+                    allow_multiple
+                ): (batch_idx, batch)
+                for batch_idx, batch in batches
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_batch):
+                batch_idx, batch = future_to_batch[future]
+                try:
+                    batch_results = future.result()
+                    results_dict[batch_idx] = batch_results
+                except Exception as e:
+                    # Handle errors gracefully - return "Uncategorized" for failed batches
+                    print(f"Error processing batch starting at index {batch_idx}: {e}")
+                    results_dict[batch_idx] = [["Uncategorized"] for _ in batch]
+        
+        # Reconstruct results in original order
+        all_results = []
+        for batch_idx in sorted(results_dict.keys()):
+            all_results.extend(results_dict[batch_idx])
         
         return all_results
     

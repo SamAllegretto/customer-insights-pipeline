@@ -18,6 +18,26 @@ A Python-based data pipeline for processing customer feedback using embeddings, 
 pip install -r requirements.txt
 ```
 
+## Configuration
+
+The pipeline can be configured via environment variables or a `.env` file. Key configuration options:
+
+### Performance Tuning
+
+- `MAX_WORKERS` (default: 5): Number of concurrent threads for LLM tagging and embedding operations. Increase for higher throughput when processing large batches, but be mindful of API rate limits.
+- `BATCH_SIZE` (default: 100): Number of records to process in each pipeline batch.
+
+### Thread Safety & Rate Limiting
+
+The pipeline uses multithreading to parallelize I/O-bound OpenAI API calls for both tagging and embedding operations. The OpenAI client is thread-safe, and no shared mutable state is accessed during parallel processing, ensuring safe concurrent execution. Both the `FeedbackTagger` and `Embedder` classes use ThreadPoolExecutor to process batches in parallel while maintaining result ordering.
+
+**Automatic Rate Limit Handling**: All API calls include exponential backoff retry logic that automatically handles rate limit errors. If the OpenAI API returns a rate limit error, the system will:
+- Retry up to 5 times with exponential backoff delays (1s, 2s, 4s, 8s, 16s)
+- Log warnings when rate limits are hit
+- Only fail after all retry attempts are exhausted
+
+This ensures robust processing even when API rate limits are encountered during high-volume operations.
+
 ## Usage
 
 ### Ingestion Pipeline
