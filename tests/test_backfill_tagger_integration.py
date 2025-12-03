@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import Mock, patch
 from src.pipelines.backfill import BackfillPipeline
 from src.config.settings import Settings
-from src.tagging.tagger import FeedbackTagger
+from src.agents.llm_agent import FeedbackTagger
 
 
 @pytest.fixture

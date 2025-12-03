@@ -1,9 +1,14 @@
 # src/agents/llm_agent.py
-from openai import OpenAI
-from typing import List, Dict, Union
+from openai import OpenAI, RateLimitError
+from typing import List, Dict, Union, Optional
 from src.config.settings import Settings
 import json
 import re
+import time
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 class ChatAgent:
     """OpenAI Chatbot client."""
@@ -16,6 +21,7 @@ class ChatAgent:
     def chat(self, messages: List[dict]) -> str:
         """
         Send a list of messages to the OpenAI chat model and get the response.
+        Uses exponential backoff retry logic for rate limit errors.
 
         Args:
             messages: List of message dicts (e.g., [{"role": "user", "content": "Hello"}])
@@ -23,11 +29,28 @@ class ChatAgent:
         Returns:
             The assistant's reply as a string.
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages
-        )
-        return response.choices[0].message.content
+        max_retries = 5
+        base_delay = 1.0  # Start with 1 second delay
+        
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages
+                )
+                return response.choices[0].message.content
+            except RateLimitError as e:
+                if attempt == max_retries - 1:
+                    # Last attempt, raise the error
+                    raise
+                
+                # Calculate exponential backoff delay
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Rate limit hit on chat completion. Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(delay)
+            except Exception as e:
+                # For other errors, raise immediately
+                raise
 
     def chat_single(self, prompt: str) -> str:
         """
@@ -291,3 +314,188 @@ class ChatAgent:
             # Fallback to individual tagging
             print(f"Batch parsing failed: {e}. Falling back to individual tagging.")
             return [self.tag_feedback(text, categories, allow_multiple) for text in feedback_texts]
+
+
+class FeedbackTagger:
+    """Tag customer feedback with predefined issue categories."""
+    
+    # Predefined Vessi product issue categories
+    DEFAULT_CATEGORIES = [
+        "Waterproof Leak",
+        "Upper Knit Separation",
+        "Insole Issue",
+        "Inner Lining Rip",
+        "Glue Gap",
+        "Discolouration",
+        "Sizes not standard",
+        "Toe Area too narrow",
+        "Toe area too big",
+        "Instep too small",
+        "instep too high",
+        "shoe too narrow",
+        "shoe too wide",
+        "half size requests",
+        "no heel lock/heel slip",
+        "Lack of grip/traction",
+        "Squeaky sound",
+        "Not breathable enough",
+        "hard to take off",
+        "hard to put on",
+        "Lack of support",
+        "Heel Cup - too big",
+        "Smelly",
+        "Back Heel Rubbing",
+        "Warping",
+        "Stains",
+        "Looks different than picture/ ugly/ not what was expected",
+        "blisters",
+        "Too Bulky",
+        "Too Heavy"
+    ]
+    
+    def __init__(self, config: Settings, custom_categories: Optional[List[str]] = None):
+        """
+        Initialize the feedback tagger.
+        
+        Args:
+            config: Settings object with OpenAI configuration
+            custom_categories: Optional custom category list (uses DEFAULT_CATEGORIES if None)
+        """
+        self.agent = ChatAgent(config)
+        self.categories = custom_categories if custom_categories else self.DEFAULT_CATEGORIES
+        self.max_workers = config.max_workers
+    
+    def tag_single(self, feedback_text: str, allow_multiple: bool = True) -> List[str]:
+        """
+        Tag a single piece of customer feedback.
+        
+        Args:
+            feedback_text: Customer feedback text
+            allow_multiple: If True, returns list of all applicable tags; if False, returns single-item list with best tag
+            
+        Returns:
+            List of category strings
+        """
+        return self.agent.tag_feedback(feedback_text, self.categories, allow_multiple)
+    
+    def tag_batch(self, feedback_texts: List[str], allow_multiple: bool = True, 
+                  batch_size: int = 10) -> List[List[str]]:
+        """
+        Tag multiple pieces of feedback efficiently using multithreading.
+        
+        Args:
+            feedback_texts: List of customer feedback texts
+            allow_multiple: If True, returns lists of multiple tags; if False, returns single-tag lists
+            batch_size: Number of feedback items to process per API call (max 20 recommended)
+            
+        Returns:
+            List of tag lists (each feedback item gets a list of tags)
+        """
+        # Split feedback into batches
+        batches = []
+        for i in range(0, len(feedback_texts), batch_size):
+            batch = feedback_texts[i:i + batch_size]
+            batches.append((i, batch))
+        
+        # Process batches in parallel using ThreadPoolExecutor
+        results_dict = {}
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all batch processing tasks
+            future_to_batch = {
+                executor.submit(
+                    self.agent.tag_feedback_batch, 
+                    batch, 
+                    self.categories, 
+                    allow_multiple
+                ): (batch_idx, batch)
+                for batch_idx, batch in batches
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_batch):
+                batch_idx, batch = future_to_batch[future]
+                try:
+                    batch_results = future.result()
+                    results_dict[batch_idx] = batch_results
+                except Exception as e:
+                    # Handle errors gracefully - return "Uncategorized" for failed batches
+                    print(f"Error processing batch starting at index {batch_idx}: {e}")
+                    results_dict[batch_idx] = [["Uncategorized"] for _ in batch]
+        
+        # Reconstruct results in original order
+        all_results = []
+        for batch_idx in sorted(results_dict.keys()):
+            all_results.extend(results_dict[batch_idx])
+        
+        return all_results
+    
+    
+    def get_category_distribution(self, feedback_texts: List[str], 
+                                 allow_multiple: bool = True) -> Dict[str, int]:
+        """
+        Get distribution of categories across multiple feedback items.
+        
+        Args:
+            feedback_texts: List of customer feedback texts
+            allow_multiple: If True, counts all tags per feedback; if False, counts only primary tag
+            
+        Returns:
+            Dict mapping category names to counts
+        """
+        all_tags = self.tag_batch(feedback_texts, allow_multiple)
+        
+        distribution = {cat: 0 for cat in self.categories}
+        distribution["Uncategorized"] = 0
+        
+        for tag_list in all_tags:
+            for tag in tag_list:
+                if tag in distribution:
+                    distribution[tag] += 1
+                else:
+                    distribution["Uncategorized"] += 1
+        
+        # Remove categories with zero counts and sort by count descending
+        return dict(sorted(
+            {k: v for k, v in distribution.items() if v > 0}.items(),
+            key=lambda x: x[1],
+            reverse=True
+        ))
+    
+    def get_multi_tag_stats(self, feedback_texts: List[str]) -> Dict[str, any]:
+        """
+        Get statistics about multi-tag occurrences.
+        
+        Args:
+            feedback_texts: List of customer feedback texts
+            
+        Returns:
+            Dict with statistics about tagging patterns
+        """
+        all_tags = self.tag_batch(feedback_texts, allow_multiple=True)
+        
+        tag_counts = [len(tags) for tags in all_tags]
+        
+        return {
+            'total_feedback': len(feedback_texts),
+            'avg_tags_per_feedback': sum(tag_counts) / len(tag_counts) if tag_counts else 0,
+            'max_tags_single_feedback': max(tag_counts) if tag_counts else 0,
+            'single_tag_count': sum(1 for c in tag_counts if c == 1),
+            'multi_tag_count': sum(1 for c in tag_counts if c > 1),
+            'no_tag_count': sum(1 for tags in all_tags if tags == ["Uncategorized"]),
+            'distribution': self.get_category_distribution(feedback_texts, allow_multiple=True)
+        }
+    
+    def add_category(self, category: str):
+        """Add a new category to the tagger."""
+        if category not in self.categories:
+            self.categories.append(category)
+    
+    def remove_category(self, category: str):
+        """Remove a category from the tagger."""
+        if category in self.categories:
+            self.categories.remove(category)
+    
+    def get_categories(self) -> List[str]:
+        """Get current list of categories."""
+        return self.categories.copy()
