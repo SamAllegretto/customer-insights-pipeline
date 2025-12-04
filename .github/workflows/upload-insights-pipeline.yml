@@ -43,27 +43,27 @@ jobs:
         pip install flake8
         
         if [ -f requirements.txt ]; then
-          echo "📦 Installing dependencies from requirements.txt"
+          echo "Installing dependencies from requirements.txt"
           pip install -r requirements.txt
         else
-          echo "📦 Installing basic dependencies for validation"
+          echo "Installing basic dependencies for validation"
           pip install pandas numpy requests azure-storage-blob azure-batch
         fi
     
     - name: Lint all scripts
       run: |
-        echo "🔍 Validating all Python scripts..."
+        echo "Validating all Python scripts..."
         find . -name "*.py" -not -path "./.git/*" -not -path "./.*" | \
         xargs flake8 --count --select=E9,F63,F7,F82 --show-source --statistics
-        echo "✅ Basic syntax validation passed"
+        echo "Basic syntax validation passed"
     
     - name: List all scripts to be uploaded
       run: |
-        echo "📋 Scripts that will be uploaded:"
+        echo "Scripts that will be uploaded:"
         echo "================================"
-        echo "📂 Source Scripts:"
+        echo "Source Scripts:"
         find src/ -name "*.py" 2>/dev/null | sort || echo "  No src scripts found"
-        echo "🧪 Test Scripts:"
+        echo "Test Scripts:"
         find tests/ -name "*.py" 2>/dev/null | sort || echo "  No test scripts found"
 
   package-and-upload:
@@ -82,14 +82,14 @@ jobs:
     
     - name: Create deployment package
       run: |
-        echo "📦 Creating deployment package..."
+        echo "Creating deployment package..."
         
         # Create timestamp for versioning
         TIMESTAMP=$(date +%Y%m%d-%H%M%S)
         COMMIT_SHA=${GITHUB_SHA:0:7}
         VERSION="${TIMESTAMP}-${COMMIT_SHA}"
         
-        echo "📋 Version: $VERSION"
+        echo "Version: $VERSION"
         echo "VERSION=$VERSION" >> $GITHUB_ENV
         
         # Create package directory
@@ -110,17 +110,17 @@ jobs:
         Branch: ${GITHUB_REF#refs/heads/}
         EOF
         
-        echo "✅ Package contents prepared"
+        echo "Package contents prepared"
         ls -la package/
     
     - name: Create ZIP archive
       run: |
-        echo "🗜️ Creating ZIP archive..."
+        echo "Creating ZIP archive..."
         cd package
         zip -r ../customer-insights-pipeline.zip . -x "**/__pycache__/*" -x "**/*.pyc" -x "**/.*"
         cd ..
         
-        echo "✅ ZIP archive created"
+        echo "ZIP archive created"
         ls -lh customer-insights-pipeline.zip
     
     - name: Install Azure CLI and dependencies
@@ -137,46 +137,71 @@ jobs:
     
     - name: Verify Azure Login
       run: |
-        echo "🔍 Verifying Azure login..."
+        echo "Verifying Azure login..."
         az account show --output table
-        echo "✅ Azure login successful"
+        echo "Azure login successful"
     
     - name: Ensure required containers exist
       run: |
-        echo "📦 Ensuring required storage containers exist..."
+        echo "Ensuring required storage containers exist..."
         
         create_container_if_not_exists() {
           local container_name=$1
-          echo "🔍 Checking if container '$container_name' exists..."
+          echo "Checking if container '$container_name' exists..."
           
           if az storage container create \
             --name $container_name \
             --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
             --auth-mode login \
             --output none 2>/dev/null; then
-            echo "  ✅ Created '$container_name' container"
+            echo "  Created '$container_name' container"
           else
             if az storage container show \
               --name $container_name \
               --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
               --auth-mode login \
               --output none 2>/dev/null; then
-              echo "  ✅ '$container_name' container already exists"
+              echo "  '$container_name' container already exists"
             else
-              echo "  ❌ Failed to create or verify '$container_name' container"
+              echo "  Failed to create or verify '$container_name' container"
               exit 1
             fi
           fi
         }
         
+        # Create required containers
         create_container_if_not_exists "customer-insights-pipeline"
-        echo "📦 All required containers are ready!"
+        create_container_if_not_exists "deployments"
+        
+        echo "All required containers are ready"
     
     - name: Upload ZIP package
       run: |
-        echo "📤 Uploading ZIP package to Azure Storage..."
+        echo "Uploading ZIP package to Azure Storage..."
         
-        # Upload the latest version
+        # Upload to deployments container (clean, no other files)
+        az storage blob upload \
+          --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+          --container-name deployments \
+          --name "customer-insights-pipeline.zip" \
+          --file "customer-insights-pipeline.zip" \
+          --overwrite \
+          --auth-mode login
+        
+        echo "ZIP package uploaded to deployments/customer-insights-pipeline.zip"
+        
+        # Also upload with version tag for rollback capability
+        az storage blob upload \
+          --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
+          --container-name deployments \
+          --name "versions/customer-insights-pipeline-${{ env.VERSION }}.zip" \
+          --file "customer-insights-pipeline.zip" \
+          --overwrite \
+          --auth-mode login
+        
+        echo "Versioned copy uploaded"
+        
+        # Keep the old location for backward compatibility (if needed)
         az storage blob upload \
           --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
           --container-name customer-insights-pipeline \
@@ -185,22 +210,11 @@ jobs:
           --overwrite \
           --auth-mode login
         
-        echo "✅ ZIP package uploaded as customer-insights-pipeline.zip"
-        
-        # Also upload with version tag for rollback capability
-        az storage blob upload \
-          --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
-          --container-name customer-insights-pipeline \
-          --name "versions/customer-insights-pipeline-${{ env.VERSION }}.zip" \
-          --file "customer-insights-pipeline.zip" \
-          --overwrite \
-          --auth-mode login
-        
-        echo "✅ Versioned copy uploaded as versions/customer-insights-pipeline-${{ env.VERSION }}.zip"
+        echo "Also uploaded to customer-insights-pipeline container"
     
     - name: Upload requirements.txt separately
       run: |
-        echo "📤 Uploading requirements.txt for easy access..."
+        echo "Uploading requirements.txt for easy access..."
         
         if [ -f "requirements.txt" ]; then
           az storage blob upload \
@@ -210,12 +224,12 @@ jobs:
             --file "requirements.txt" \
             --overwrite \
             --auth-mode login
-          echo "✅ Uploaded requirements.txt"
+          echo "Uploaded requirements.txt"
         fi
     
     - name: Create deployment manifest
       run: |
-        echo "📋 Creating deployment manifest..."
+        echo "Creating deployment manifest..."
         
         cat > deployment_manifest.json << EOF
         {
@@ -224,7 +238,7 @@ jobs:
           "commit_sha": "${GITHUB_SHA}",
           "branch": "${GITHUB_REF#refs/heads/}",
           "package_format": "zip",
-          "package_url": "https://${{ secrets.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/customer-insights-pipeline/customer-insights-pipeline.zip",
+          "package_url": "https://${{ secrets.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/deployments/customer-insights-pipeline.zip",
           "requirements_url": "https://${{ secrets.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/customer-insights-pipeline/requirements.txt",
           "modules": [
             "agents",
@@ -245,42 +259,42 @@ jobs:
         }
         EOF
         
-        echo "📋 Deployment manifest created:"
+        echo "Deployment manifest created"
         cat deployment_manifest.json | jq .
     
     - name: Upload deployment manifest
       run: |
-        echo "📤 Uploading deployment manifest..."
+        echo "Uploading deployment manifest..."
         
         az storage blob upload \
           --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
-          --container-name customer-insights-pipeline \
+          --container-name deployments \
           --name "deployment_manifest.json" \
           --file "deployment_manifest.json" \
           --overwrite \
           --auth-mode login
         
-        echo "✅ Deployment manifest uploaded"
+        echo "Deployment manifest uploaded"
     
     - name: List uploaded files
       run: |
-        echo "📋 Listing uploaded files in storage..."
+        echo "Listing uploaded files in deployments container..."
         az storage blob list \
           --account-name ${{ secrets.AZURE_STORAGE_ACCOUNT }} \
-          --container-name customer-insights-pipeline \
+          --container-name deployments \
           --auth-mode login \
           --output table \
           --query "[?!starts_with(name, 'versions/')].{Name:name, Size:properties.contentLength, LastModified:properties.lastModified}"
     
     - name: Summary
       run: |
-        echo "🎉 Deployment package uploaded successfully!"
+        echo "Deployment package uploaded successfully"
         echo "=========================================="
-        echo "📦 Package: customer-insights-pipeline.zip"
-        echo "📋 Version: ${{ env.VERSION }}"
-        echo "🔗 Package URL: https://${{ secrets.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/customer-insights-pipeline/customer-insights-pipeline.zip"
+        echo "Package: customer-insights-pipeline.zip"
+        echo "Version: ${{ env.VERSION }}"
+        echo "Package URL: https://${{ secrets.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/deployments/customer-insights-pipeline.zip"
         echo ""
-        echo "📝 To use in Azure Batch:"
+        echo "To use in Azure Batch:"
         echo "  1. Extract the ZIP in your Batch start task"
         echo "  2. Install dependencies: pip install -r requirements.txt"
         echo "  3. Run your scripts: python -m src.pipelines.ingest"
@@ -295,12 +309,12 @@ jobs:
     - name: Upload Status
       run: |
         if [ "${{ needs.package-and-upload.result }}" == "success" ]; then
-          echo "✅ Deployment package uploaded successfully to Azure Storage!"
-          echo "🎯 Ready for use in Azure Data Factory pipelines"
-          echo "📍 Storage Account: ${{ secrets.AZURE_STORAGE_ACCOUNT }}"
-          echo "📍 Container: customer-insights-pipeline/"
-          echo "📦 Package format: ZIP (no duplicate file issues)"
+          echo "Deployment package uploaded successfully to Azure Storage"
+          echo "Ready for use in Azure Data Factory pipelines"
+          echo "Storage Account: ${{ secrets.AZURE_STORAGE_ACCOUNT }}"
+          echo "Container: deployments/"
+          echo "Package format: ZIP (no duplicate file issues)"
         else
-          echo "❌ Package upload failed!"
-          echo "📋 Check the logs above for details"
+          echo "Package upload failed"
+          echo "Check the logs above for details"
         fi
