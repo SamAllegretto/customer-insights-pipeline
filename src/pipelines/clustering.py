@@ -72,10 +72,10 @@ class ClusteringPipeline:
         # Fetch the feedback data
         self.sql_client.connect()
         self.cosmos_client.connect()
-        feedback_records = self.cosmos_client.get_embeddings_by_date_range(
+        feedback_records = self.cosmos_client.get_all_embeddings(
             start_date=start_date,
             end_date=end_date,
-            source_filter=None,
+            limit=limit,
         )
 
         logger.info(f"Fetched {len(feedback_records)} feedback records for clustering")
@@ -104,7 +104,7 @@ class ClusteringPipeline:
         clusterer = clusterer_cls(**self.algo_params)
         labels = clusterer.fit_predict(feature_matrix)
         df["cluster_id"] = labels
-        
+
         logger.info(f"Clustering complete ({df['cluster_id'].nunique()} clusters found)")
 
         # Persist results if needed (not implemented here, could write to Cosmos or SQL)

@@ -7,15 +7,28 @@ A Python-based data pipeline for processing customer feedback using embeddings, 
 - **Flexible Ingestion**: Process feedback over any date range with daily, custom, or full backfill options
 - **Embedding Generation**: Generate embeddings for customer feedback using OpenAI's text-embedding models
 - **Vector Storage**: Store embeddings in PostgreSQL with pgvector extension
-- **Clustering**: Group similar feedback using KMeans, DBSCAN, or Agglomerative clustering
+- **Advanced Clustering**: 
+  - Traditional algorithms (KMeans, DBSCAN, Agglomerative)
+  - **UMAP + HDBSCAN with Recursive Clustering**: Discover hierarchical customer segments by "zooming in" on clusters
 - **Tagging**: Automatically tag feedback with predefined categories using LLM
 - **SQL Integration**: Read feedback from SQL Server and store results
 - **Azure Integration**: Automated deployment to Azure Blob Storage for Azure Batch execution via Azure Data Factory
 
 ## Installation
-
 ```bash
 pip install -r requirements.txt
+```
+
+### Additional Dependencies for Advanced Clustering
+
+For UMAP + HDBSCAN recursive clustering:
+```bash
+pip install umap-learn hdbscan
+```
+
+For local visualization and analysis:
+```bash
+pip install matplotlib seaborn
 ```
 
 ## Configuration
@@ -71,8 +84,102 @@ python -m src.pipelines.ingest --days-back 7 --batch-size 50 --limit 1000
 - `--batch-size N`: Number of records to process in each batch (default: from config)
 - `--limit N`: Maximum number of records to process
 
-## Testing
+### Clustering Pipeline
 
+#### Traditional Clustering
+
+Basic clustering with KMeans, DBSCAN, or Agglomerative algorithms:
+```bash
+python -m src.pipelines.clustering --algorithm kmeans --lookback 30
+```
+
+**Available options:**
+- `--algorithm`: Choose from `kmeans`, `dbscan`, `agglomerative`
+- `--lookback N`: Process feedback from the last N days
+- `--start-date YYYY-MM-DD`: Start date for clustering
+- `--end-date YYYY-MM-DD`: End date for clustering
+- `--limit N`: Maximum number of records to cluster
+- `--algo-param key=value`: Pass algorithm-specific parameters (e.g., `--algo-param n_clusters=5`)
+
+#### Advanced Clustering: UMAP + HDBSCAN with Recursive Clustering
+
+This approach implements the methodology described in [this article](https://link-to-article.com) for discovering hierarchical customer segments through dimensionality reduction and density-based clustering.
+
+**How it works:**
+1. **UMAP (Uniform Manifold Approximation and Projection)**: Reduces high-dimensional embeddings while preserving local and global structure
+2. **HDBSCAN (Hierarchical Density-Based Spatial Clustering)**: Finds natural clusters without requiring predefined cluster counts
+3. **Recursive "Zooming"**: Automatically identifies subclusters within parent clusters to reveal nuanced customer segments
+
+**Production deployment (Azure Data Factory):**
+```bash
+python -m src.pipelines.recursive_clustering --lookback 30 --recursive-depth 2
+```
+
+**Local development with visualizations and analysis:**
+```bash
+python -m src.pipelines.recursive_clustering --lookback 30 --local --recursive-depth 2 --limit 5000
+```
+
+**Available options:**
+- `--lookback N`: Process feedback from the last N days
+- `--start-date YYYY-MM-DD`: Start date for clustering
+- `--end-date YYYY-MM-DD`: End date for clustering
+- `--limit N`: Maximum number of records to cluster
+- `--recursive-depth N`: How many levels to recurse (1 = no recursion, 2-3 recommended)
+- `--min-cluster-size N`: Minimum points for HDBSCAN cluster (default: 500)
+- `--min-cluster-pct`: Minimum cluster size as percentage of data (default: 0.01)
+- `--n-neighbors N`: UMAP n_neighbors parameter (default: 15)
+- `--n-components N`: UMAP dimensionality (default: 2, use 2-3 for visualization)
+- `--hdbscan-metric`: Distance metric for HDBSCAN (`euclidean` or `cosine`)
+- `--local`: Enable local mode with visualizations and analysis outputs
+- `--output-dir PATH`: Directory for local mode outputs (default: ./cluster_output)
+
+**Local mode outputs:**
+
+When `--local` is enabled, the pipeline generates:
+
+1. **Cluster visualizations** (`clusters_*.png`): Scatter plots showing cluster structure and size distributions at each depth level
+2. **Cluster analysis** (`cluster_analysis_*.csv`): Statistics and sample reviews for each cluster
+3. **Detailed assignments** (`cluster_assignments_*.csv`): Complete mapping of feedback_id to hierarchical cluster labels
+4. **Summary report** (`summary_report.txt`): Overall clustering statistics and top clusters
+
+**Example workflow:**
+```bash
+# Step 1: Local analysis - explore clustering structure
+python -m src.pipelines.recursive_clustering \
+  --lookback 90 \
+  --local \
+  --recursive-depth 2 \
+  --min-cluster-size 200 \
+  --output-dir ./analysis_2024q1
+
+# Step 2: Review outputs in ./analysis_2024q1/
+# - Check cluster visualizations to validate structure
+# - Examine cluster_analysis CSVs for segment characteristics
+# - Review summary_report.txt for overall statistics
+
+# Step 3: Production run - save results to database
+python -m src.pipelines.recursive_clustering \
+  --lookback 90 \
+  --recursive-depth 2 \
+  --min-cluster-size 200
+```
+
+**Understanding cluster labels:**
+
+Clusters are labeled hierarchically:
+- `root.0`, `root.1`, `root.2`: Top-level clusters
+- `root.0.0`, `root.0.1`: Subclusters within `root.0`
+- `root.0.0.noise`: Noise points that don't fit any subcluster
+
+**Tuning recommendations:**
+
+- **For broad segments**: Use `--recursive-depth 1` with larger `--min-cluster-size 1000`
+- **For detailed segments**: Use `--recursive-depth 2-3` with smaller `--min-cluster-size 200-500`
+- **For text embeddings**: Use `--hdbscan-metric cosine` if keeping high dimensions, or `euclidean` for 2D UMAP output
+- **For large datasets**: Start with `--limit 10000` locally to validate parameters before full run
+
+## Testing
 ```bash
 pip install -r requirements-dev.txt
 pytest tests/
@@ -89,4 +196,3 @@ For setup instructions, see [AZURE_DEPLOYMENT.md](AZURE_DEPLOYMENT.md).
 Current test coverage: 43%
 - 37 tests passing
 - Core components (schemas, embedder, llm_agent, clusterer) all tested
-
