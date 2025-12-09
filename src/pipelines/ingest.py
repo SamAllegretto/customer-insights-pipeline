@@ -22,28 +22,23 @@ logger = logging.getLogger(__name__)
 class IngestionPipeline:
     """Pipeline for ingesting and processing feedback records over a flexible date range."""
     
-    def __init__(self, config: Settings, categories: Optional[List[str]] = None):
+    def __init__(self, config: Settings, categories: Optional[List[str]] = None, embeddings_only: bool = False):
         """
         Initialize the ingestion pipeline.
         
         Args:
             config: Application settings
             categories: List of tag categories for LLM tagging. If None, uses default categories from FeedbackTagger.
+            embeddings_only: If True, only generate embeddings without LLM tagging.
         """
         self.config = config
+        self.embeddings_only = embeddings_only
         self.sql_client = SQLClient(config)
         self.cosmos_client = CosmosClient(config)
         self.embedder = Embedder(config)
-        self.tagger = FeedbackTagger(config, custom_categories=categories)
+        self.tagger = None if embeddings_only else FeedbackTagger(config, custom_categories=categories)
     
-    def run(
-        self,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
-        days_back: Optional[int] = None,
-        batch_size: Optional[int] = None,
-        limit: Optional[int] = None
-    ) -> dict:
+    def run(self, start_date: Optional[datetime] = None, end_date: Optional[datetime] = None, days_back: Optional[int] = None, batch_size: Optional[int] = None, limit: Optional[int] = None) -> dict:
         """
         Execute the ingestion pipeline.
         
@@ -120,8 +115,9 @@ class IngestionPipeline:
                 embeddings_batch = self._process_embeddings_batch(batch)
                 embeddings_created += len(embeddings_batch)
 
-                tags_batch = self._process_tags_batch(batch)
-                tags_created += len(tags_batch)
+                if not self.embeddings_only:
+                    tags_batch = self._process_tags_batch(batch)
+                    tags_created += len(tags_batch)
                     
 
             logger.info(
@@ -169,7 +165,8 @@ class IngestionPipeline:
                 vector=vector,
                 source=feedback.source,
                 model=self.config.openai_embedding_model,
-                created_at=datetime.now(timezone.utc)
+                created_at=feedback.created_at,
+                feedback_text=feedback.text
             )
             embedding_records.append(embedding_record)
         
@@ -204,7 +201,7 @@ class IngestionPipeline:
                     feedback_id=feedback.feedback_id,
                     tag_name=tag_name,
                     confidence_score=1.0,  # LLM doesn't provide confidence scores
-                    created_at=datetime.now(timezone.utc)
+                    created_at=feedback.created_at
                 )
                 tag_records.append(tag_record)
         
@@ -252,6 +249,11 @@ def main():
         type=int,
         help='Number of records to process in each batch'
     )
+    parser.add_argument(
+        '--embeddings-only',
+        action='store_true',
+        help='Only generate embeddings without LLM tagging'
+    )
     
     args = parser.parse_args()
     
@@ -282,7 +284,7 @@ def main():
     config = Settings()
     
     # Run ingestion pipeline
-    pipeline = IngestionPipeline(config)
+    pipeline = IngestionPipeline(config, embeddings_only=args.embeddings_only)
     stats = pipeline.run(
         start_date=start_date,
         end_date=end_date,

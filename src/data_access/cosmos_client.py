@@ -8,6 +8,7 @@ from psycopg2.extras import execute_values
 from typing import List, Tuple, Optional
 from src.config.settings import Settings
 from src.models.schemas import EmbeddingRecord
+from psycopg2.extensions import adapt
 
 
 class CosmosClient:
@@ -71,31 +72,27 @@ class CosmosClient:
             self.connect()
         
         values = [
-            (r.feedback_id, r.vector, r.model, r.source, r.created_at)
+            (r.feedback_id, r.vector, r.model, r.source, r.created_at, r.feedback_text)
             for r in records
         ]
         
+        
         query = """
-            INSERT INTO embeddings (feedback_id, vector, model, source, created_at)
+            INSERT INTO embeddings (feedback_id, vector, model, source, created_at, feedback_text)
             VALUES %s
             ON CONFLICT (feedback_id) DO UPDATE 
             SET vector = EXCLUDED.vector, 
                 model = EXCLUDED.model,
                 source = EXCLUDED.source,
-                created_at = EXCLUDED.created_at
+                created_at = EXCLUDED.created_at,
+                feedback_text = EXCLUDED.feedback_text
         """
         
         with self.conn.cursor() as cursor:
             execute_values(cursor, query, values)
             self.conn.commit()
     
-    def search_similar(
-        self, 
-        query_vector: List[float], 
-        limit: int = 10,
-        distance_threshold: Optional[float] = None,
-        source_filter: Optional[str] = None
-    ) -> List[Tuple[str, float]]:
+    def search_similar(self, query_vector: List[float], limit: int = 10, distance_threshold: Optional[float] = None, source_filter: Optional[str] = None) -> List[Tuple[str, float]]:
         """
         Find similar vectors using cosine distance.
         
@@ -141,13 +138,13 @@ class CosmosClient:
             feedback_ids: List of feedback IDs
         
         Returns:
-            List of (feedback_id, vector, source) tuples
+            List of (feedback_id, vector, source, feedback_text) tuples
         """
         if not self.conn:
             self.connect()
         
         query = """
-            SELECT feedback_id, vector, source
+            SELECT feedback_id, vector, source, feedback_text
             FROM embeddings
             WHERE feedback_id = ANY(%s)
         """
@@ -159,43 +156,45 @@ class CosmosClient:
    
 
     
-    def get_all_embeddings(
-        self, 
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        source_filter: Optional[str] = None
-    ) -> List[Tuple[str, List[float], str]]:
+    def get_all_embeddings(self, start_date: Optional[str] = None, end_date: Optional[str] = None, source_filter: Optional[str] = None, print_query: bool = False) -> List[Tuple[str, List[float], str]]:
         """
         Retrieve all embeddings, optionally filtered by date range and source.
-        
+
         Args:
             start_date: Optional start date filter
             end_date: Optional end date filter
             source_filter: Optional filter by source (review, return, chat)
-        
+            print_query: If True, print the SQL query and parameters
+
         Returns:
-            List of (feedback_id, vector, source) tuples
+            List of (feedback_id, vector, source, feedback_text) tuples
         """
         if not self.conn:
             self.connect()
-        
-        query = "SELECT feedback_id, vector, source FROM embeddings WHERE 1=1"
+
+        query = "SELECT feedback_id, vector, source, feedback_text FROM embeddings WHERE 1=1"
         params = []
-        
         if source_filter:
-            query += " AND source = %s"
-            params.append(source_filter)
-        
+            query += f" AND source = '{source_filter}'"
+
         if start_date and end_date:
-            query += " AND created_at BETWEEN %s AND %s"
-            params.extend([start_date, end_date])
+            query += f" AND created_at BETWEEN '{start_date}' AND '{end_date}'"
         elif start_date:
-            query += " AND created_at >= %s"
-            params.append(start_date)
+            query += f" AND created_at >= '{start_date}'"
         elif end_date:
-            query += " AND created_at <= %s"
-            params.append(end_date)
-        
-        with self.conn.cursor() as cursor:
-            cursor.execute(query, params)
-            return cursor.fetchall()
+            query += f" AND created_at <= '{end_date}'"
+
+        if print_query:
+            print("SQL Query:", query)
+            with self.conn.cursor() as cursor:
+                cursor.execute(query)
+                results = cursor.fetchall()
+                # Preserve data types from DB (e.g., vector as list of floats)
+                return [
+                (
+                    row[0],  # feedback_id (str)
+                    row[1],
+                    row[2]   # source (str)
+                )
+                for row in results
+                ]
